@@ -6,14 +6,16 @@ import "./globals.css";
 // Force dynamic rendering so it always fetches fresh DB data
 export const dynamic = "force-dynamic";
 
-function getClient() {
+const globalForPrisma = globalThis;
+if (!globalForPrisma.prisma) {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   const adapter = new PrismaPg(pool);
-  return new PrismaClient({ adapter });
+  globalForPrisma.prisma = new PrismaClient({ adapter });
 }
+const prisma = globalForPrisma.prisma;
 
 export default async function Dashboard() {
-  const prisma = getClient();
+
   // Fetch Leaderboard
   const users = await prisma.user.findMany({
     orderBy: { totalConfidence: 'desc' },

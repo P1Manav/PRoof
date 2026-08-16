@@ -7,30 +7,31 @@ import { judgeDescription } from "@/lib/gemini";
 
 const MARKER = "<!-- proof-bot-v2 -->";
 
-function getClient() {
+const globalForPrisma = globalThis;
+if (!globalForPrisma.prisma) {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   const adapter = new PrismaPg(pool);
-  return new PrismaClient({ adapter });
+  globalForPrisma.prisma = new PrismaClient({ adapter });
 }
-
+const prisma = globalForPrisma.prisma;
 
 export async function POST(req) {
-  const prisma = getClient();
+
   const event = req.headers.get("x-github-event");
   const payload = await req.json();
 
   if (event === "pull_request" && (payload.action === "opened" || payload.action === "synchronize")) {
-    await handlePullRequest(payload, prisma);
+    await handlePullRequest(payload);
   } else if (event === "pull_request" && payload.action === "closed") {
-    await handlePullRequestClosed(payload, prisma);
+    await handlePullRequestClosed(payload);
   } else if (event === "check_run" && payload.action === "completed") {
-    await handleCheckRunCompleted(payload, prisma);
+    await handleCheckRunCompleted(payload);
   }
 
   return NextResponse.json({ success: true });
 }
 
-async function handlePullRequest(payload, prisma) {
+async function handlePullRequest(payload) {
   const { pull_request: pr, repository: repo, installation } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
@@ -82,7 +83,7 @@ ${aiAssessment.covered ? "✅" : "❌"} ${aiAssessment.reasoning}
   await postOrUpdateComment(octokit, owner, repoName, pr.number, MARKER, body);
 }
 
-async function handlePullRequestClosed(payload, prisma) {
+async function handlePullRequestClosed(payload) {
   const { pull_request: pr, repository: repo, installation } = payload;
   const isMerged = pr.merged;
   
@@ -122,7 +123,7 @@ async function handlePullRequestClosed(payload, prisma) {
   }
 }
 
-async function handleCheckRunCompleted(payload, prisma) {
+async function handleCheckRunCompleted(payload) {
   const { check_run, repository: repo, installation } = payload;
   if (check_run.conclusion !== "failure") return;
 
