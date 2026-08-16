@@ -5,27 +5,32 @@ import { Pool } from "pg";
 import { getOctokit, postOrUpdateComment } from "@/lib/githubApp";
 import { judgeDescription } from "@/lib/gemini";
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter });
 const MARKER = "<!-- proof-bot-v2 -->";
 
+function getClient() {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const adapter = new PrismaPg(pool);
+  return new PrismaClient({ adapter });
+}
+
+
 export async function POST(req) {
+  const prisma = getClient();
   const event = req.headers.get("x-github-event");
   const payload = await req.json();
 
   if (event === "pull_request" && (payload.action === "opened" || payload.action === "synchronize")) {
-    await handlePullRequest(payload);
+    await handlePullRequest(payload, prisma);
   } else if (event === "pull_request" && payload.action === "closed") {
-    await handlePullRequestClosed(payload);
+    await handlePullRequestClosed(payload, prisma);
   } else if (event === "check_run" && payload.action === "completed") {
-    await handleCheckRunCompleted(payload);
+    await handleCheckRunCompleted(payload, prisma);
   }
 
   return NextResponse.json({ success: true });
 }
 
-async function handlePullRequest(payload) {
+async function handlePullRequest(payload, prisma) {
   const { pull_request: pr, repository: repo, installation } = payload;
   const owner = repo.owner.login;
   const repoName = repo.name;
@@ -77,7 +82,7 @@ ${aiAssessment.covered ? "✅" : "❌"} ${aiAssessment.reasoning}
   await postOrUpdateComment(octokit, owner, repoName, pr.number, MARKER, body);
 }
 
-async function handlePullRequestClosed(payload) {
+async function handlePullRequestClosed(payload, prisma) {
   const { pull_request: pr, repository: repo, installation } = payload;
   const isMerged = pr.merged;
   
@@ -117,7 +122,7 @@ async function handlePullRequestClosed(payload) {
   }
 }
 
-async function handleCheckRunCompleted(payload) {
+async function handleCheckRunCompleted(payload, prisma) {
   const { check_run, repository: repo, installation } = payload;
   if (check_run.conclusion !== "failure") return;
 

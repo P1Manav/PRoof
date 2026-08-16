@@ -3,14 +3,17 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import "./globals.css";
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter });
-
 // Force dynamic rendering so it always fetches fresh DB data
 export const dynamic = "force-dynamic";
 
+function getClient() {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const adapter = new PrismaPg(pool);
+  return new PrismaClient({ adapter });
+}
+
 export default async function Dashboard() {
+  const prisma = getClient();
   // Fetch Leaderboard
   const users = await prisma.user.findMany({
     orderBy: { totalConfidence: 'desc' },
