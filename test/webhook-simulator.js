@@ -20,7 +20,7 @@ async function simulateWebhook() {
   };
 
   try {
-    const res = await fetch("http://localhost:3000/api/webhooks/github", {
+    const res = await fetch("http://localhost:3001/api/webhooks/github", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
