@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# post-commit hook — calls the confidence logger
+# Never let this script block a commit; errors are swallowed intentionally.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+node "$SCRIPT_DIR/log-confidence.js" || true

@@ -1,0 +1,43 @@
+name: Receipts — PR Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+# Minimum permissions: read commits, write PR comments
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  audit:
+    name: Receipts PR Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history so git notes and git log work)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # git notes are NOT fetched by actions/checkout — must be explicit.
+      - name: Fetch git notes (refs/notes/receipts)
+        run: |
+          git fetch origin refs/notes/receipts:refs/notes/receipts || true
+          echo "Fetched notes (missing refs/notes/receipts is OK for repos with no scores yet)"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run PR audit
+        run: node action/pr-audit.js
+        env:
+          # GITHUB_TOKEN is automatically provided by GitHub Actions.
+          # The `github-token` input is read via @actions/core.getInput().
+          INPUT_GITHUB-TOKEN: ${{ secrets.GITHUB_TOKEN }}
