@@ -1,0 +1,38 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String    @id // GitHub node_id or login
+  login           String    @unique
+  avatarUrl       String?
+  totalConfidence Int       @default(0)
+  successfulPrs   Int       @default(0)
+  failedPrs       Int       @default(0)
+  receipts        Receipt[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Receipt {
+  id           String   @id @default(uuid())
+  sha          String
+  prNumber     Int?
+  repoFullName String
+  confidence   Int
+  outcome      String?  // e.g. "SUCCESS", "FAILURE", "REVERTED", "PENDING"
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  timestamp    DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([sha, repoFullName])
+}
