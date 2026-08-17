@@ -28,6 +28,8 @@ model Receipt {
   repoFullName String
   confidence   Int
   outcome      String?  // e.g. "SUCCESS", "FAILURE", "REVERTED", "PENDING"
+  source       String?  // "git-note" | "comment"
+  commenter    String?  // GitHub login of the person who replied via comment
   userId       String
   user         User     @relation(fields: [userId], references: [id])
   timestamp    DateTime @default(now())
@@ -35,4 +37,30 @@ model Receipt {
   updatedAt    DateTime @updatedAt
 
   @@unique([sha, repoFullName])
+  @@unique([repoFullName, prNumber, userId])
+}
+
+/// Tracks GitHub App installations (one row per installation, updated on
+/// installation webhooks). Used to know which repos an installation covers.
+model Installation {
+  id           Int      @id  // GitHub installation ID
+  appId        Int
+  accountLogin String
+  repos        String[] // array of repo full_names covered by this installation
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// Tracks the bot's confidence-prompt comment on each PR so we can edit it
+/// in-place rather than spamming new comments.
+model ConfidencePrompt {
+  id           String   @id @default(uuid())
+  repoFullName String
+  prNumber     Int
+  commentId    BigInt   // GitHub comment ID of the bot's prompt comment
+  answered     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([repoFullName, prNumber])
 }

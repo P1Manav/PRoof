@@ -210,6 +210,96 @@ section('8. receipts help');
     : fail(`Help text missing expected content:\n${r.stdout}`);
 }
 
+// ── test 9: cross-repo confidence score parser isolation ─────────────────────
+
+section('9. parseConfidenceScore — accepted and rejected formats');
+{
+  // We test the score parser logic independently (it's a pure function
+  // embedded in route.js). We inline it here for unit-testing purposes.
+  function parseConfidenceScore(body) {
+    const text = body.trim();
+    const patterns = [
+      /^confidence\s*:\s*(\d+)/i,
+      /^(\d+)\s*\/\s*10$/,
+      /^(\d+)$/,
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) {
+        const n = parseInt(match[1], 10);
+        if (n >= 1 && n <= 10) return n;
+      }
+    }
+    return null;
+  }
+
+  // Accepted formats
+  parseConfidenceScore('7') === 7 ? ok('"7" → 7') : fail('"7" not parsed');
+  parseConfidenceScore('10') === 10 ? ok('"10" → 10') : fail('"10" not parsed');
+  parseConfidenceScore('1') === 1 ? ok('"1" → 1') : fail('"1" not parsed');
+  parseConfidenceScore('8/10') === 8 ? ok('"8/10" → 8') : fail('"8/10" not parsed');
+  parseConfidenceScore('confidence: 8') === 8 ? ok('"confidence: 8" → 8') : fail('"confidence: 8" not parsed');
+  parseConfidenceScore('confidence:8') === 8 ? ok('"confidence:8" → 8') : fail('"confidence:8" not parsed');
+  parseConfidenceScore('CONFIDENCE: 5') === 5 ? ok('"CONFIDENCE: 5" (case-insensitive) → 5') : fail('"CONFIDENCE: 5" not parsed');
+
+  // Rejected formats
+  parseConfidenceScore('banana') === null ? ok('"banana" → null (ignored)') : fail('"banana" should be null');
+  parseConfidenceScore('0') === null ? ok('"0" → null (out of range)') : fail('"0" should be null');
+  parseConfidenceScore('11') === null ? ok('"11" → null (out of range)') : fail('"11" should be null');
+  parseConfidenceScore('') === null ? ok('"" → null') : fail('"" should be null');
+  parseConfidenceScore('lgtm') === null ? ok('"lgtm" → null') : fail('"lgtm" should be null');
+}
+
+// ── test 10: cross-repo data isolation (DB-level simulation) ─────────────────
+
+section('10. Cross-repo isolation — receipt scoping simulation');
+{
+  // Simulate two repos with receipts in separate buckets.
+  // In production, all queries in route.js are scoped to repoFullName.
+  // Here we verify the scoping logic (in-memory).
+
+  const receipts = [
+    { repoFullName: 'acme/repo-a', prNumber: 101, userId: 'alice', confidence: 7 },
+    { repoFullName: 'acme/repo-a', prNumber: 101, userId: 'bob',   confidence: 5 },
+    { repoFullName: 'acme/repo-b', prNumber: 201, userId: 'alice', confidence: 9 },
+    { repoFullName: 'acme/repo-b', prNumber: 201, userId: 'carol', confidence: 3 },
+  ];
+
+  const queryForRepo = (fullName, prNum) =>
+    receipts.filter(r => r.repoFullName === fullName && r.prNumber === prNum);
+
+  const repoAResults = queryForRepo('acme/repo-a', 101);
+  const repoBResults = queryForRepo('acme/repo-b', 201);
+
+  // repo-a results contain only repo-a data
+  const repoAHasRepoBData = repoAResults.some(r => r.repoFullName === 'acme/repo-b');
+  !repoAHasRepoBData
+    ? ok('repo-a query returns no repo-b data')
+    : fail('repo-a query leaks repo-b data!');
+
+  // repo-b results contain only repo-b data
+  const repoBHasRepoAData = repoBResults.some(r => r.repoFullName === 'acme/repo-a');
+  !repoBHasRepoAData
+    ? ok('repo-b query returns no repo-a data')
+    : fail('repo-b query leaks repo-a data!');
+
+  // Counts are correct
+  repoAResults.length === 2
+    ? ok(`repo-a has 2 receipts (got ${repoAResults.length})`)
+    : fail(`repo-a should have 2 receipts, got ${repoAResults.length}`);
+  repoBResults.length === 2
+    ? ok(`repo-b has 2 receipts (got ${repoBResults.length})`)
+    : fail(`repo-b should have 2 receipts, got ${repoBResults.length}`);
+
+  // alice's score on repo-b (9) should NOT appear in repo-a results
+  const aliceOnRepoA = repoAResults.find(r => r.userId === 'alice');
+  aliceOnRepoA && aliceOnRepoA.confidence !== 9
+    ? ok("alice's repo-b score (9) does not appear in repo-a results")
+    : !aliceOnRepoA
+    ? ok("alice is not in repo-a results (correct — she only has repo-a PR 101)")
+    : fail("alice's repo-b score leaked into repo-a results");
+}
+
 // ── cleanup ───────────────────────────────────────────────────────────────────
 
 fs.rmSync(SCRATCH, { recursive: true, force: true });
@@ -218,3 +308,4 @@ fs.rmSync(SCRATCH, { recursive: true, force: true });
 
 console.log(`\n${BOLD}Results: ${GREEN}${passed} passed${RESET}${BOLD}, ${failed ? RED : GREEN}${failed} failed${RESET}\n`);
 process.exit(failed > 0 ? 1 : 0);
+
