@@ -2,6 +2,9 @@
 # post-commit hook — calls the confidence logger
 # Never let this script block a commit; errors are swallowed intentionally.
 
+# Git closes stdin in hooks. Reconnect it to the terminal so we can prompt.
+exec < /dev/tty || true
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 node "$SCRIPT_DIR/log-confidence.js" || true
