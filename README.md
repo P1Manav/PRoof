@@ -31,7 +31,7 @@ No dashboard. No cross-repo visibility. Each repo's data stays in its own PR thr
 
 ## Install the GitHub App
 
-1. Go to the [PRoof GitHub App page](https://github.com/apps/proof-bot) _(replace with your app's slug)_
+1. Go to the [PRoof GitHub App page](https://github.com/apps/pr-o0of)
 2. Click **Install** and select the repositories you want PRoof to monitor
 3. That's it — PRoof will automatically start commenting on new PRs
 
