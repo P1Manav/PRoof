@@ -57,13 +57,17 @@ The local hook captures confidence at commit time, giving finer-grained data per
 To install the hook into a repo:
 
 ```bash
+# From the PRoof directory, install it into your target repo:
 bash install.sh /path/to/your/repo
+
+# Or to install it in the PRoof repository itself:
+bash install.sh .
 ```
 
 After installation, when you `git commit`, you'll be prompted:
 
 ```
-Confidence this commit works (1-10, or Enter to skip):
+Confidence this commit works (1-10): 
 ```
 
 The score is stored as a git note (`git notes --ref=receipts`) and submitted to PRoof's backend automatically.
