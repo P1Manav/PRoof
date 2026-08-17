@@ -150,6 +150,23 @@ async function handleInstallation(payload) {
   }
 }
 
+// ── Commit Status helper ──────────────────────────────────────────────────────
+
+async function setCommitStatus(octokit, owner, repo, sha, state, description) {
+  try {
+    await octokit.rest.repos.createCommitStatus({
+      owner,
+      repo,
+      sha,
+      state, // "pending", "success", "error", or "failure"
+      description,
+      context: "PRoof Confidence",
+    });
+  } catch (err) {
+    console.error(`[PRoof] Failed to set commit status for ${sha}:`, err.message);
+  }
+}
+
 // ── PR opened ────────────────────────────────────────────────────────────────
 
 async function handlePullRequestOpened(payload) {
@@ -177,6 +194,9 @@ async function handlePullRequestOpened(payload) {
     update: { commentId: BigInt(commentId), answered: false },
     create: { repoFullName: fullName, prNumber: pr.number, commentId: BigInt(commentId) },
   });
+
+  // 2.5. Set commit status to 'pending' to block merge.
+  await setCommitStatus(octokit, owner, repoName, pr.head.sha, "pending", "Waiting for confidence score reply");
 
   // 3. Fetch commits for audit.
   const { data: commits } = await octokit.rest.pulls.listCommits({
@@ -240,7 +260,10 @@ async function handlePullRequestSynchronize(payload) {
       data: { answered: false, commentId: BigInt(commentId) },
     });
   }
-  // If not yet answered — do nothing; the original prompt still stands.
+  
+  // Set the new commit's status to 'pending' (it applies to the new sha whether we re-prompted or not).
+  const octokit = await getOctokit(installation?.id);
+  await setCommitStatus(octokit, owner, repoName, pr.head.sha, "pending", "Waiting for confidence score reply");
 }
 
 // ── issue_comment created ─────────────────────────────────────────────────────
@@ -336,6 +359,9 @@ async function handleIssueCommentCreated(payload) {
     comment_id: comment.id,
     content: "+1",
   });
+
+  // Mark the commit status as success.
+  await setCommitStatus(octokit, owner, repoName, headSha, "success", `Confidence score recorded: ${score}/10`);
 }
 
 // ── PR closed ────────────────────────────────────────────────────────────────
