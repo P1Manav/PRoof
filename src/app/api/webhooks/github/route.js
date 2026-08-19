@@ -5,6 +5,9 @@ import { Pool } from "pg";
 import { createHmac, timingSafeEqual } from "crypto";
 import { getOctokit, postOrUpdateComment } from "@/lib/githubApp";
 import { judgeDescription } from "@/lib/gemini";
+import { isAdmin } from "@/lib/permissions";
+import { enableMandatoryCheck, disableMandatoryCheck, getProofRuleset } from "@/lib/rulesets";
+import { setMandatory, getReport } from "@/lib/proofActions";
 
 // ── Markers ───────────────────────────────────────────────────────────────────
 
@@ -277,6 +280,8 @@ async function handleIssueCommentCreated(payload) {
   const fullName = repo.full_name;
   const prNumber = issue.number;
   const commenterLogin = comment.user.login;
+  const owner = repo.owner.login;
+  const repoName = repo.name;
 
   // Don't react to our own bot comments.
   // (Bot comments contain our marker strings.)
@@ -286,6 +291,49 @@ async function handleIssueCommentCreated(payload) {
   ) {
     return;
   }
+
+  // ── /proof command router ────────────────────────────────────────────────
+  // Match /proof <command> BEFORE falling through to the number parser.
+  const trimmedBody = comment.body.trim();
+  const proofCmdMatch = trimmedBody.match(/^\/proof\s+(config|report|help)\b(.*)/is);
+
+  if (proofCmdMatch) {
+    const cmd = proofCmdMatch[1].toLowerCase();
+    const rest = proofCmdMatch[2].trim();
+    const octokit = await getOctokit(installation?.id);
+
+    if (cmd === 'help') {
+      await handleProofHelp(octokit, owner, repoName, prNumber);
+      return;
+    }
+
+    // Admin-only commands
+    const adminCheck = await isAdmin(octokit, owner, repoName, commenterLogin);
+    if (!adminCheck) {
+      await octokit.rest.issues.createComment({
+        owner,
+        repo: repoName,
+        issue_number: prNumber,
+        body: `> ⛔ Only repo admins can change PRoof's merge requirements.`,
+      });
+      return;
+    }
+
+    if (cmd === 'config') {
+      await handleProofConfig(octokit, owner, repoName, prNumber, fullName, commenterLogin, rest);
+      return;
+    }
+
+    if (cmd === 'report') {
+      await handleProofReport(octokit, owner, repoName, prNumber, fullName);
+      return;
+    }
+
+    // Unknown sub-command — fall through silently
+    return;
+  }
+
+  // ── Existing confidence-score number parsing (untouched) ─────────────────
 
   // Look up the open confidence prompt for this PR.
   const prompt = await prisma.confidencePrompt.findUnique({
@@ -300,8 +348,6 @@ async function handleIssueCommentCreated(payload) {
   const octokit = await getOctokit(installation?.id);
 
   // Fetch the PR to get the HEAD commit SHA.
-  const owner = repo.owner.login;
-  const repoName = repo.name;
   const { data: pr } = await octokit.rest.pulls.get({
     owner,
     repo: repoName,
@@ -439,6 +485,112 @@ async function handleCheckRunCompleted(payload) {
       }
     }
   }
+}
+
+// ── /proof command handlers ───────────────────────────────────────────────────
+
+/**
+ * Handle `/proof help` — no permission check required.
+ */
+async function handleProofHelp(octokit, owner, repo, issueNumber) {
+  const body = `### 🤖 PRoof — Available Commands
+
+| Command | Description | Admin only? |
+|---|---|---|
+| \`/proof help\` | Show this help message | No |
+| \`/proof config mandatory on\` | Make PRoof confidence check a required merge status | **Yes** |
+| \`/proof config mandatory off\` | Remove the merge requirement | **Yes** |
+| \`/proof report\` | Show aggregate confidence stats for this repo | **Yes** |
+
+**Logging confidence (non-admin):**
+Reply to the confidence prompt with a number 1–10 (e.g. \`8\` or \`confidence: 8\`).
+
+> PRoof bot • [What is this?](https://github.com/P1Manav/PRoof)`;
+
+  await octokit.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body,
+  });
+}
+
+/**
+ * Handle `/proof config mandatory on|off`.
+ * Admin check is done before this is called.
+ * Delegates to proofActions.setMandatory for shared logic.
+ */
+async function handleProofConfig(octokit, owner, repo, issueNumber, fullName, actorLogin, rest) {
+  // Parse "mandatory on" or "mandatory off"
+  const configMatch = rest.match(/^mandatory\s+(on|off)$/i);
+  if (!configMatch) {
+    await octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body: `> ⚠️ Unknown config option. Use \`/proof config mandatory on\` or \`/proof config mandatory off\`.`,
+    });
+    return;
+  }
+
+  const enabled = configMatch[1].toLowerCase() === 'on';
+
+  // Delegate to shared action (manages both ruleset + RepoSettings upsert)
+  await setMandatory({ octokit, owner, repo, actorLogin, enabled });
+
+  const statusLine = enabled
+    ? `✅ **Mandatory enabled** — the \`PRoof Confidence\` status check is now a required merge condition on the default branch.`
+    : `🔓 **Mandatory disabled** — the merge requirement has been removed.`;
+
+  await octokit.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body: `### 🤖 PRoof — Config Updated\n\n${statusLine}\n\n_Updated by @${actorLogin}_`,
+  });
+}
+
+/**
+ * Handle `/proof report`.
+ * Admin check is done before this is called.
+ * Delegates to proofActions.getReport for shared logic.
+ * NOTE: Visible to anyone who can see this thread.
+ */
+async function handleProofReport(octokit, owner, repo, issueNumber, fullName) {
+  const report = await getReport({ owner, repo });
+
+  if (report.totalReceipts === 0) {
+    await octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body: `### 📊 PRoof — Confidence Report\n\nNo confidence scores recorded for \`${fullName}\` yet.\n\n_Visible to anyone who can see this thread._`,
+    });
+    return;
+  }
+
+  const tableRows = report.byUser
+    .map((u) => `| @${u.login} | ${u.count} | ${u.avg.toFixed(1)}/10 | ${u.successes} | ${u.failures} |`)
+    .join('\n');
+
+  const body = `### 📊 PRoof — Confidence Report for \`${fullName}\`
+
+| Contributor | Scores | Avg Confidence | Successes | Failures |
+|---|---|---|---|---|
+${tableRows}
+
+_Total receipts: ${report.totalReceipts}_
+
+> ⚠️ **Visible to anyone who can see this thread.**
+
+> PRoof bot • [What is this?](https://github.com/P1Manav/PRoof)`;
+
+  await octokit.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body,
+  });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

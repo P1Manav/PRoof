@@ -64,3 +64,13 @@ model ConfidencePrompt {
 
   @@unique([repoFullName, prNumber])
 }
+
+/// Per-repo PRoof settings. One row per repo that has had settings touched.
+/// Repos with no row are implicitly mandatory: false (the default).
+model RepoSettings {
+  repoFullName String   @id
+  mandatory    Boolean  @default(false)
+  updatedBy    String?
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+}
