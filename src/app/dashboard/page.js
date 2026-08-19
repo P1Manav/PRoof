@@ -94,14 +94,18 @@ export default async function DashboardPage() {
   // Get all repos this user's OAuth token can see via app installations
   const userRepos = await getReposForUser(accessToken);
 
-  // Cross-reference with PRoof's own Installation table
+  // Cross-reference with PRoof's own Installation table (case-insensitive)
   const allInstallations = await prisma.installation.findMany({
     select: { repos: true, id: true },
   });
-  const proofRepos = new Set(allInstallations.flatMap((i) => i.repos));
+  
+  // Use lowercase for reliable set matching
+  const proofRepos = new Set(
+    allInstallations.flatMap((i) => i.repos.map((r) => r.toLowerCase()))
+  );
 
   // Only show repos that are in BOTH the user's list AND PRoof's list
-  const visibleRepos = userRepos.filter((r) => proofRepos.has(r));
+  const visibleRepos = userRepos.filter((r) => proofRepos.has(r.toLowerCase()));
 
   // For each repo, get the live permission and settings
   const repoData = await Promise.all(
@@ -109,7 +113,9 @@ export default async function DashboardPage() {
       const [owner, repo] = fullName.split("/");
 
       // Find the installation ID for this repo to get app-scoped Octokit
-      const installation = allInstallations.find((i) => i.repos.includes(fullName));
+      const installation = allInstallations.find((i) =>
+        i.repos.some((r) => r.toLowerCase() === fullName.toLowerCase())
+      );
       if (!installation) return null;
 
       try {
@@ -131,15 +137,27 @@ export default async function DashboardPage() {
       <div style={{ maxWidth: "800px", margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" }}>
           <h1 style={{ fontSize: "1.5rem", margin: 0 }}>🧾 PRoof Dashboard</h1>
-          <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
-            Signed in as <strong>{userLogin}</strong>
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+            <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
+              Signed in as <strong>{userLogin}</strong>
+            </span>
+            <form action="/api/auth/signout" method="POST">
+              <button type="submit" style={{ background: "#334155", color: "#fff", border: "none", padding: "0.4rem 0.8rem", borderRadius: "0.25rem", cursor: "pointer", fontSize: "0.8rem" }}>
+                Sign Out
+              </button>
+            </form>
+          </div>
         </div>
 
         {validRepos.length === 0 ? (
-          <p style={{ color: "#94a3b8" }}>
-            No repos found where PRoof is installed and you have access.
-          </p>
+          <div style={{ padding: "1.5rem", background: "#1e293b", borderRadius: "0.5rem", border: "1px solid #334155" }}>
+            <p style={{ margin: "0 0 1rem 0", color: "#cbd5e1" }}>
+              No repos found where PRoof is installed and you have access.
+            </p>
+            <p style={{ margin: 0, fontSize: "0.85rem", color: "#94a3b8" }}>
+              <em>💡 Note: If you know you installed the app but it isn't showing up here, your GitHub session token may have expired (they expire every 8 hours). Please try signing out and signing back in!</em>
+            </p>
+          </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {validRepos.map(({ fullName, owner, repo, permission, mandatory }) => (
