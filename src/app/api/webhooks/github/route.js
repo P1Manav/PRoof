@@ -11,8 +11,7 @@ import { setMandatory, getReport } from "@/lib/proofActions";
 
 // ── Markers ───────────────────────────────────────────────────────────────────
 
-const AUDIT_MARKER = "<!-- proof-bot-v2 -->";
-const CONFIDENCE_MARKER = "<!-- proof-confidence-prompt -->";
+const V3_MARKER = "<!-- proof-bot-v3 -->";
 
 // ── Prisma singleton ──────────────────────────────────────────────────────────
 
@@ -180,35 +179,14 @@ async function handlePullRequestOpened(payload) {
 
   const octokit = await getOctokit(installation?.id);
 
-  // 1. Post confidence prompt comment (one per PR).
-  const promptBody = buildConfidencePromptBody(pr);
-  const commentId = await postOrUpdateComment(
-    octokit,
-    owner,
-    repoName,
-    pr.number,
-    CONFIDENCE_MARKER,
-    promptBody
-  );
-
-  // 2. Store (or reset) the ConfidencePrompt tracking row.
-  await prisma.confidencePrompt.upsert({
-    where: { repoFullName_prNumber: { repoFullName: fullName, prNumber: pr.number } },
-    update: { commentId: BigInt(commentId), answered: false },
-    create: { repoFullName: fullName, prNumber: pr.number, commentId: BigInt(commentId) },
-  });
-
-  // 2.5. Set commit status to 'pending' to block merge.
-  await setCommitStatus(octokit, owner, repoName, pr.head.sha, "pending", "Waiting for confidence score reply");
-
-  // 3. Fetch commits for audit.
+  // 1. Fetch commits for audit.
   const { data: commits } = await octokit.rest.pulls.listCommits({
     owner,
     repo: repoName,
     pull_number: pr.number,
   });
 
-  // 4. Fetch any existing receipts (from git-notes hook).
+  // 2. Fetch any existing receipts (from git-notes hook).
   const shas = commits.map((c) => c.sha);
   const receipts = await prisma.receipt.findMany({
     where: { sha: { in: shas }, repoFullName: fullName },
@@ -217,15 +195,32 @@ async function handlePullRequestOpened(payload) {
   const lowestConfidence =
     receipts.length > 0 ? Math.min(...receipts.map((r) => r.confidence)) : null;
 
-  // 5. AI description audit.
+  // 3. AI description audit.
   const diffStat = `Commits: ${commits.length}, Additions: ${pr.additions ?? "?"}, Deletions: ${pr.deletions ?? "?"}, Changed Files: ${pr.changed_files ?? "?"}`;
   const aiAssessment = await judgeDescription(pr.body, diffStat);
 
-  // 6. Post or update audit comment.
+  // 4. Post unified v3 comment.
   const confText =
     lowestConfidence !== null ? `${lowestConfidence}/10` : "no scores recorded yet";
-  const auditBody = buildAuditCommentBody(confText, aiAssessment);
-  await postOrUpdateComment(octokit, owner, repoName, pr.number, AUDIT_MARKER, auditBody);
+  const body = buildV3BotBody(pr, aiAssessment, confText);
+  const commentId = await postOrUpdateComment(
+    octokit,
+    owner,
+    repoName,
+    pr.number,
+    V3_MARKER,
+    body
+  );
+
+  // 5. Store (or reset) the ConfidencePrompt tracking row.
+  await prisma.confidencePrompt.upsert({
+    where: { repoFullName_prNumber: { repoFullName: fullName, prNumber: pr.number } },
+    update: { commentId: BigInt(commentId), answered: false },
+    create: { repoFullName: fullName, prNumber: pr.number, commentId: BigInt(commentId) },
+  });
+
+  // 6. Set commit status to 'pending' to block merge.
+  await setCommitStatus(octokit, owner, repoName, pr.head.sha, "pending", "Waiting for confidence score reply");
 }
 
 // ── PR synchronize ────────────────────────────────────────────────────────────
@@ -246,18 +241,30 @@ async function handlePullRequestSynchronize(payload) {
     return;
   }
 
+  const octokit = await getOctokit(installation?.id);
+
   if (existing.answered) {
-    // New commits after an answer was logged — re-open the prompt.
-    const octokit = await getOctokit(installation?.id);
-    const reopenBody = buildConfidencePromptBody(pr, /* reopen */ true);
+    // New commits after an answer was logged — re-prompt and re-audit.
+    const { data: commits } = await octokit.rest.pulls.listCommits({
+      owner,
+      repo: repoName,
+      pull_number: pr.number,
+    });
+    
+    const diffStat = `Commits: ${commits.length}, Additions: ${pr.additions ?? "?"}, Deletions: ${pr.deletions ?? "?"}, Changed Files: ${pr.changed_files ?? "?"}`;
+    const aiAssessment = await judgeDescription(pr.body, diffStat);
+
+    const reopenBody = buildV3BotBody(pr, aiAssessment, "needs re-evaluation", /* reopen */ true);
+    
     const commentId = await postOrUpdateComment(
       octokit,
       owner,
       repoName,
       pr.number,
-      CONFIDENCE_MARKER,
+      V3_MARKER,
       reopenBody
     );
+    
     await prisma.confidencePrompt.update({
       where: { repoFullName_prNumber: { repoFullName: fullName, prNumber: pr.number } },
       data: { answered: false, commentId: BigInt(commentId) },
@@ -265,7 +272,6 @@ async function handlePullRequestSynchronize(payload) {
   }
   
   // Set the new commit's status to 'pending' (it applies to the new sha whether we re-prompted or not).
-  const octokit = await getOctokit(installation?.id);
   await setCommitStatus(octokit, owner, repoName, pr.head.sha, "pending", "Waiting for confidence score reply");
 }
 
@@ -285,10 +291,7 @@ async function handleIssueCommentCreated(payload) {
 
   // Don't react to our own bot comments.
   // (Bot comments contain our marker strings.)
-  if (
-    comment.body.includes(CONFIDENCE_MARKER) ||
-    comment.body.includes(AUDIT_MARKER)
-  ) {
+  if (comment.body.includes(V3_MARKER)) {
     return;
   }
 
@@ -621,12 +624,22 @@ function parseConfidenceScore(body) {
   return null;
 }
 
-function buildConfidencePromptBody(pr, reopen = false) {
+function buildV3BotBody(pr, aiAssessment, confText, reopen = false) {
   const header = reopen
     ? "🔄 **PRoof — Confidence Re-check**\n\nNew commits were pushed. Please re-confirm your confidence in this PR."
     : "👋 **PRoof — Confidence Check**\n\nBefore this PR is merged, reply with your confidence that the code is correct.";
 
-  return `${CONFIDENCE_MARKER}
+  return `${V3_MARKER}
+## 🤖 PRoof Audit
+
+### 📝 AI Description Audit
+${aiAssessment.covered ? "✅" : "❌"} ${aiAssessment.reasoning}
+
+---
+
+### 🧾 Confidence Status
+⬜ **Lowest confidence score in this PR:** ${confText}
+
 ${header}
 
 **Reply with a number 1–10** (e.g. \`8\` or \`confidence: 8\`):
@@ -637,23 +650,6 @@ ${header}
 
 > PRoof will follow up with a receipt if CI fails or the PR is closed without merging.
 
-<sub>PRoof bot • [What is this?](https://github.com/P1Manav/PRoof)</sub>
-`;
-}
-
-function buildAuditCommentBody(confText, aiAssessment) {
-  return `${AUDIT_MARKER}
-## 🧾 PRoof — PR Audit (v2)
-
-⬜ **Lowest confidence score in this PR:** ${confText}
-
----
-
-### Description vs diff
-${aiAssessment.covered ? "✅" : "❌"} ${aiAssessment.reasoning}
-
----
-
-<sub>PRoof bot v2 • [What is this?](https://github.com/P1Manav/PRoof)</sub>
+<sub>PRoof bot v3 • [What is this?](https://github.com/P1Manav/PRoof)</sub>
 `;
 }
