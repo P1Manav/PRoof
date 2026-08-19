@@ -96,13 +96,12 @@ export default async function DashboardPage() {
 
   // Cross-reference with PRoof's own Installation table (case-insensitive)
   const allInstallations = await prisma.installation.findMany({
-    select: { repos: true, id: true },
+    select: { repos: true, id: true, accountLogin: true },
   });
   
   // Use lowercase for reliable set matching
-  const proofRepos = new Set(
-    allInstallations.flatMap((i) => i.repos.map((r) => r.toLowerCase()))
-  );
+  const proofReposList = allInstallations.flatMap((i) => i.repos.map((r) => r.toLowerCase()));
+  const proofRepos = new Set(proofReposList);
 
   // Only show repos that are in BOTH the user's list AND PRoof's list
   const visibleRepos = userRepos.filter((r) => proofRepos.has(r.toLowerCase()));
@@ -154,9 +153,15 @@ export default async function DashboardPage() {
             <p style={{ margin: "0 0 1rem 0", color: "#cbd5e1" }}>
               No repos found where PRoof is installed and you have access.
             </p>
-            <p style={{ margin: 0, fontSize: "0.85rem", color: "#94a3b8" }}>
+            <p style={{ margin: "0 0 1rem 0", fontSize: "0.85rem", color: "#94a3b8" }}>
               <em>💡 Note: If you know you installed the app but it isn't showing up here, your GitHub session token may have expired (they expire every 8 hours). Please try signing out and signing back in!</em>
             </p>
+            <div style={{ background: "#0f172a", padding: "1rem", borderRadius: "0.25rem", border: "1px solid #334155", fontSize: "0.8rem", fontFamily: "monospace" }}>
+              <strong>Debug Info:</strong><br/>
+              GitHub API says you can access: <code>{JSON.stringify(userRepos)}</code><br/>
+              PRoof database tracks: <code>{JSON.stringify(proofReposList)}</code><br/>
+              Token exists: <code>{accessToken ? "Yes" : "No"}</code>
+            </div>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
