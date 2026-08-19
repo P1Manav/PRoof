@@ -107,6 +107,7 @@ export default async function DashboardPage() {
   const visibleRepos = userRepos.filter((r) => proofRepos.has(r.toLowerCase()));
 
   // For each repo, get the live permission and settings
+  const repoErrors = [];
   const repoData = await Promise.all(
     visibleRepos.map(async (fullName) => {
       const [owner, repo] = fullName.split("/");
@@ -123,7 +124,8 @@ export default async function DashboardPage() {
         const settings = await getRepoSettings({ owner, repo });
 
         return { fullName, owner, repo, permission, mandatory: settings.mandatory };
-      } catch {
+      } catch (err) {
+        repoErrors.push(`${fullName}: ${err.message}`);
         return null;
       }
     })
@@ -156,11 +158,12 @@ export default async function DashboardPage() {
             <p style={{ margin: "0 0 1rem 0", fontSize: "0.85rem", color: "#94a3b8" }}>
               <em>💡 Note: If you know you installed the app but it isn't showing up here, your GitHub session token may have expired (they expire every 8 hours). Please try signing out and signing back in!</em>
             </p>
-            <div style={{ background: "#0f172a", padding: "1rem", borderRadius: "0.25rem", border: "1px solid #334155", fontSize: "0.8rem", fontFamily: "monospace" }}>
+            <div style={{ background: "#0f172a", padding: "1rem", borderRadius: "0.25rem", border: "1px solid #334155", fontSize: "0.8rem", fontFamily: "monospace", wordBreak: "break-all" }}>
               <strong>Debug Info:</strong><br/>
               GitHub API says you can access: <code>{JSON.stringify(userRepos)}</code><br/>
               PRoof database tracks: <code>{JSON.stringify(proofReposList)}</code><br/>
-              Token exists: <code>{accessToken ? "Yes" : "No"}</code>
+              Token exists: <code>{accessToken ? "Yes" : "No"}</code><br/>
+              Errors fetching repo details: <code style={{color: "#ef4444"}}>{JSON.stringify(repoErrors)}</code>
             </div>
           </div>
         ) : (
